@@ -1,5 +1,7 @@
 streamlit
 pandas
-openpyxl
 plotly
 numpy
+openpyxl
+python-pptx
+kaleido
