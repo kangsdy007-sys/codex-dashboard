@@ -3,14 +3,19 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 
+# ============================
+# CONFIG PAGE
+# ============================
 st.set_page_config(page_title="Dashboard Ticket CODEX", layout="wide")
-
 st.title("📊 Dashboard Analisa Ticket CODEX (Versi Lengkap)")
 
-uploaded = st.file_uploader("📂 Upload File CODEx (.xlsx)", type=["xlsx"])
+# ============================
+# UPLOAD FILE
+# ============================
+uploaded = st.file_uploader("📁 Upload File CODEX (.xlsx)", type=["xlsx"])
 
 if uploaded is None:
-    st.info("Silakan upload file CODEx (.xlsx) terlebih dahulu.")
+    st.info("Silakan upload file CODEX (.xlsx) terlebih dahulu.")
     st.stop()
 
 # ============================
@@ -21,137 +26,98 @@ df = pd.read_excel(uploaded)
 # Normalisasi nama kolom
 df.columns = [c.strip() for c in df.columns]
 
-# pastikan kolom tanggal ada
-if "CREATE TICKET" not in df.columns:
-    st.error("Kolom 'CREATE TICKET' tidak ditemukan!")
+# Pastikan kolom wajib ada
+required_cols = ["CREATE TICKET", "STATUS", "NO-TICKET"]
+missing = [c for c in required_cols if c not in df.columns]
+if len(missing) > 0:
+    st.error(f"Kolom wajib tidak ditemukan: {missing}")
     st.stop()
 
-# Convert tanggal
-df["CREATE TICKET"] = pd.to_datetime(df["CREATE TICKET"], errors="coerce")
-
-if "CLOSE TICKET" in df.columns:
-    df["CLOSE TICKET"] = pd.to_datetime(df["CLOSE TICKET"], errors="coerce")
-else:
-    df["CLOSE TICKET"] = None
-
-today = datetime.now()
-
 # ============================
-# PERHITUNGAN AGING
+# FUNGSI HITUNG AGING
 # ============================
 def hitung_aging(row):
-    if row["STATUS"].lower() == "open":
-        return (today - row["CREATE TICKET"]).days
-    elif pd.notnull(row["CLOSE TICKET"]):
-        return (row["CLOSE TICKET"] - row["CREATE TICKET"]).days
-    else:
+    status = str(row.get("STATUS", "")).lower().strip()
+
+    create_date = row.get("CREATE TICKET", None)
+    if pd.isna(create_date):
         return 0
 
+    try:
+        create_date = pd.to_datetime(create_date)
+    except:
+        return 0
+
+    age = (datetime.now() - create_date).days
+    return max(age, 0)
+
+# Tambahkan kolom AGING
 df["AGE_DAYS"] = df.apply(hitung_aging, axis=1)
 
 # ============================
-# SLA LEVEL
-# ============================
-def sla_level(age):
-    if age > 30:
-        return "Critical (>30 hari)"
-    elif age > 7:
-        return "Major (7–30 hari)"
-    elif age > 3:
-        return "Minor (3–7 hari)"
-    else:
-        return "Normal (<3 hari)"
-
-df["SLA_LEVEL"] = df["AGE_DAYS"].apply(sla_level)
-
-# ============================
-# SIDEBAR FILTER
+# FILTER
 # ============================
 st.sidebar.header("⚙️ Filter")
 
-subdivisi_list = ["ALL"] + sorted(df["ASSIGN DIVISION"].dropna().unique().tolist())
+# Filter Sub Divisi jika ada
+subdiv_col = None
+for c in df.columns:
+    if "DIV" in c.upper():
+        subdiv_col = c
+        break
+
+if subdiv_col:
+    subdiv_list = ["ALL"] + sorted(df[subdiv_col].dropna().unique().tolist())
+    subdiv = st.sidebar.selectbox("Sub Divisi", subdiv_list)
+
+    if subdiv != "ALL":
+        df = df[df[subdiv_col] == subdiv]
+
+# Filter Status
 status_list = ["ALL"] + sorted(df["STATUS"].dropna().unique().tolist())
-sla_list = ["ALL"] + sorted(df["SLA_LEVEL"].unique())
+status = st.sidebar.selectbox("Status Ticket", status_list)
 
-f_subdiv = st.sidebar.selectbox("Sub Divisi", subdivisi_list)
-f_status = st.sidebar.selectbox("Status Ticket", status_list)
-f_sla = st.sidebar.selectbox("SLA Level", sla_list)
-
-filtered_df = df.copy()
-
-if f_subdiv != "ALL":
-    filtered_df = filtered_df[filtered_df["ASSIGN DIVISION"] == f_subdiv]
-
-if f_status != "ALL":
-    filtered_df = filtered_df[filtered_df["STATUS"] == f_status]
-
-if f_sla != "ALL":
-    filtered_df = filtered_df[filtered_df["SLA_LEVEL"] == f_sla]
+if status != "ALL":
+    df = df[df["STATUS"] == status]
 
 # ============================
-# TAMPILKAN DATA
+# STATISTIK RINGKAS
 # ============================
-st.subheader("📁 Data Ticket (Setelah Filter)")
-st.dataframe(filtered_df, use_container_width=True)
+st.subheader("📌 Ringkasan Data")
+
+col1, col2, col3 = st.columns(3)
+col1.metric("Total Ticket", len(df))
+col2.metric("Ticket OPEN", len(df[df["STATUS"].str.lower() == "open"]))
+col3.metric("Ticket CLOSED", len(df[df["STATUS"].str.lower() == "close"]))
 
 # ============================
-# GRAFIK STATUS OPEN / CLOSE
+# DISTRIBUSI AGING
 # ============================
-st.subheader("📊 Distribusi Status Ticket")
-fig_pie = px.pie(df, names="STATUS", title="Persentase Ticket Open / Close")
-st.plotly_chart(fig_pie, use_container_width=True)
+st.subheader("⏳ Distribusi Umur Ticket (Aging)")
 
-# ============================
-# GRAFIK SLA LEVEL
-# ============================
-st.subheader("🚦 SLA Level Ticket")
-fig_sla = px.bar(
-    df["SLA_LEVEL"].value_counts().reset_index(),
-    x="index",
-    y="SLA_LEVEL",
-    labels={"index": "SLA Level", "SLA_LEVEL": "Jumlah"},
-    color="index",
+fig_age = px.histogram(
+    df,
+    x="AGE_DAYS",
+    nbins=20,
+    title="Distribusi Umur Ticket (Hari)",
+    color="STATUS"
 )
-st.plotly_chart(fig_sla, use_container_width=True)
+st.plotly_chart(fig_age, use_container_width=True)
 
 # ============================
-# GRAFIK AGING
+# TABEL DETAIL
 # ============================
-st.subheader("📈 Aging Ticket (Open Only)")
-df_open = df[df["STATUS"] == "Open"]
+st.subheader("📋 Data Lengkap Ticket CODEX")
+st.dataframe(df, use_container_width=True)
 
-if len(df_open) > 0:
-    fig_age = px.bar(
-        df_open,
-        x="NO-TICKET",
-        y="AGE_DAYS",
-        color="AGE_DAYS",
-        text="AGE_DAYS",
-        title="Umur Ticket (Hari) – Ticket OPEN",
-    )
-    st.plotly_chart(fig_age, use_container_width=True)
-else:
-    st.info("Tidak ada ticket open.")
+# Download button
+@st.cache_data
+def konversi_excel(df):
+    return df.to_excel("output.xlsx", index=False)
 
-# ============================
-# TOP 10 TICKET TERTUA
-# ============================
-st.subheader("🔥 TOP 10 Ticket Paling Lama")
-top10 = df_open.sort_values("AGE_DAYS", ascending=False).head(10)
-st.dataframe(top10, use_container_width=True)
-
-# ============================
-# RATA-RATA TICKET PER DIVISI
-# ============================
-if "ASSIGN DIVISION" in df.columns:
-    st.subheader("🏢 Rata-rata Aging per Assign Division")
-    avg_age = df_open.groupby("ASSIGN DIVISION")["AGE_DAYS"].mean().reset_index()
-
-    fig_avg = px.bar(
-        avg_age,
-        x="ASSIGN DIVISION",
-        y="AGE_DAYS",
-        title="Rata-rata Umur Ticket per Divisi",
-        color="AGE_DAYS",
-    )
-    st.plotly_chart(fig_avg, use_container_width=True)
+st.download_button(
+    "📥 Download Data Hasil Olahan (.xlsx)",
+    data=df.to_csv(index=False).encode("utf-8"),
+    file_name="codex_processed.csv",
+    mime="text/csv"
+)
