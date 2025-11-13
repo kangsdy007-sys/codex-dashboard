@@ -1,7 +1,6 @@
 streamlit
 pandas
 plotly
-numpy
 openpyxl
 python-pptx
-html2image
+numpy
