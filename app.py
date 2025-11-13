@@ -2,150 +2,121 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
+from pptx import Presentation
+from pptx.util import Inches
+from io import BytesIO
+import tempfile
 
 st.set_page_config(page_title="Dashboard Ticket CODEX", layout="wide")
 
-# =========================================================
+# ============================
 # TITLE
-# =========================================================
-st.title("📊 Dashboard Analisa Ticket CODEX — Versi Lengkap")
+# ============================
+st.title("📊 Dashboard Analisa Ticket CODEX — Versi Lengkap & Export PPT")
 
-uploaded = st.file_uploader("📁 Upload File CODEX (.xlsx)", type=["xlsx"])
-if uploaded is None:
-    st.info("Silakan upload file CODEx (.xlsx) terlebih dahulu.")
+st.info("Upload 2 file Excel (bulan ini & bulan lalu).")
+
+
+# ============================
+# UPLOAD FILE
+# ============================
+file1 = st.file_uploader("📁 Upload File CODEX Bulan 1 (.xlsx)", type=["xlsx"])
+file2 = st.file_uploader("📁 Upload File CODEX Bulan 2 (.xlsx)", type=["xlsx"])
+ppt_template = "template PPT Moratel.pptx"
+
+if file1 is None or file2 is None:
+    st.warning("Upload **dua file Excel** terlebih dahulu.")
     st.stop()
 
-# Load Data
-df = pd.read_excel(uploaded)
+# ============================
+# LOAD DATA
+# ============================
+df1 = pd.read_excel(file1)
+df2 = pd.read_excel(file2)
+
+df = pd.concat([df1, df2], ignore_index=True)
 df.columns = [c.strip() for c in df.columns]
 
 # Normalisasi kolom wajib
-required_cols = ["NO-TICKET", "HOSTNAME", "INTERFACE", "STATUS", 
+required_cols = ["NO-TICKET", "HOSTNAME", "INTERFACE", "STATUS",
                  "ASSIGN DIVISION", "CREATE TICKET"]
 
 for col in required_cols:
     if col not in df.columns:
-        st.error(f"Kolom **{col}** tidak ditemukan. Periksa file Excel.")
+        st.error(f"Kolom **{col}** tidak ditemukan dalam file Excel.")
         st.stop()
 
-# Convert tanggal → datetime
 df["CREATE TICKET"] = pd.to_datetime(df["CREATE TICKET"], errors="coerce")
-
-# Hitung age of ticket
 df["AGE_DAYS"] = (datetime.now() - df["CREATE TICKET"]).dt.days
 
-# Sub Divisi extracted
 df["SUB_DIVISI"] = df["ASSIGN DIVISION"].str.split("-").str[-1].str.strip()
-
-# PIC extracted
 df["PIC"] = df["ASSIGN DIVISION"].str.split("-").str[0].str.strip()
 
-# Status ticket OPEN / CLOSE (jika ada 2 kolom STATUS)
 if "STATUS.1" in df.columns:
     df["STATUS_TICKET"] = df["STATUS.1"]
 else:
     df["STATUS_TICKET"] = df["STATUS"]
 
-# ===================================================================
-# SIDEBAR FILTER
-# ===================================================================
-st.sidebar.header("⚙️ Filter")
 
-subdivisi_opt = ["ALL"] + sorted(df["SUB_DIVISI"].dropna().unique().tolist())
-status_opt = ["ALL"] + sorted(df["STATUS_TICKET"].dropna().unique().tolist())
-pic_opt = ["ALL"] + sorted(df["PIC"].dropna().unique().tolist())
+# ============================
+# SUMMARY NUMBERS
+# ============================
+st.subheader("📌 Ringkasan Data Ticket")
 
-bulan_opt = ["ALL"] + sorted(df["CREATE TICKET"].dt.month_name().unique().tolist())
-tahun_opt = ["ALL"] + sorted(df["CREATE TICKET"].dt.year.unique().tolist())
-
-f_sub = st.sidebar.selectbox("Sub Divisi", subdivisi_opt)
-f_status = st.sidebar.selectbox("Status Ticket", status_opt)
-f_pic = st.sidebar.selectbox("PIC", pic_opt)
-f_bulan = st.sidebar.selectbox("Bulan", bulan_opt)
-f_tahun = st.sidebar.selectbox("Tahun", tahun_opt)
-
-# Apply filter
-filtered = df.copy()
-
-if f_sub != "ALL":
-    filtered = filtered[filtered["SUB_DIVISI"] == f_sub]
-
-if f_status != "ALL":
-    filtered = filtered[filtered["STATUS_TICKET"] == f_status]
-
-if f_pic != "ALL":
-    filtered = filtered[filtered["PIC"] == f_pic]
-
-if f_bulan != "ALL":
-    filtered = filtered[filtered["CREATE TICKET"].dt.month_name() == f_bulan]
-
-if f_tahun != "ALL":
-    filtered = filtered[filtered["CREATE TICKET"].dt.year == f_tahun]
-
-st.success(f"Total data setelah filter: {len(filtered)}")
-
-# ============================================================
-# SUMMARY NUMBER CARD
-# ============================================================
-st.subheader("📌 Ringkasan Data")
 c1, c2, c3, c4 = st.columns(4)
+c1.metric("Total Ticket", len(df))
+c2.metric("Critical", df["STATUS"].str.contains("Critical", case=False).sum())
+c3.metric("Warning", df["STATUS"].str.contains("Warning", case=False).sum())
+c4.metric("Average Age (Days)", round(df["AGE_DAYS"].mean(), 1))
 
-c1.metric("Total Ticket", len(filtered))
-c2.metric("Critical", filtered["STATUS"].str.contains("Critical", case=False).sum())
-c3.metric("Warning", filtered["STATUS"].str.contains("Warning", case=False).sum())
-c4.metric("Average Age (Days)", round(filtered["AGE_DAYS"].mean(), 1))
 
-# ============================================================
+# ============================
 # GRAFIK STATUS
-# ============================================================
-st.subheader("📊 Distribusi Ticket Berdasarkan Kategori STATUS")
-count_status = filtered["STATUS"].value_counts().reset_index()
+# ============================
+st.subheader("📊 Grafik Status Ticket")
+
+count_status = df["STATUS"].value_counts().reset_index()
 count_status.columns = ["STATUS", "JUMLAH"]
 
-fig_status = px.bar(count_status, x="STATUS", y="JUMLAH", color="STATUS",
-                    color_discrete_sequence=px.colors.qualitative.Set1)
+fig_status = px.bar(count_status, x="STATUS", y="JUMLAH",
+                    color="STATUS", title="Distribusi Kategori Status")
+
 st.plotly_chart(fig_status, use_container_width=True)
 
-# ============================================================
-# TABLE RINCIAN STATUS
-# ============================================================
-st.subheader("📄 Tabel Rincian Status Ticket")
 
-summary = filtered.groupby("STATUS").agg(
-    JUMLAH=("STATUS", "count"),
-    AVG_AGE=("AGE_DAYS", "mean"),
-    MAX_AGE=("AGE_DAYS", "max")
-).reset_index()
+# ============================
+# GRAFIK AGE DAYS
+# ============================
+st.subheader("⏳ Distribusi Umur Ticket (Age Days)")
 
-summary["AVG_AGE"] = summary["AVG_AGE"].round(1)
-st.dataframe(summary, use_container_width=True)
+fig_age = px.histogram(df, x="AGE_DAYS", nbins=30, color="STATUS",
+                       title="Distribusi AGE Ticket")
 
-# ============================================================
-# HISTOGRAM AGE DAYS
-# ============================================================
-st.subheader("⏳ Distribusi Umur Ticket (AGE_DAYS)")
-
-fig_age = px.histogram(filtered, x="AGE_DAYS", nbins=30, color="STATUS",
-                       color_discrete_sequence=px.colors.qualitative.Set2)
 st.plotly_chart(fig_age, use_container_width=True)
 
-# ============================================================
-# PRODUKTIVITAS PIC PER BULAN
-# ============================================================
-st.subheader("🧑‍💻 Performance PIC per Bulan")
 
-filtered["MONTH"] = filtered["CREATE TICKET"].dt.month_name()
-pic_perf = filtered.groupby(["PIC", "MONTH"]).size().reset_index(name="JUMLAH")
+# ============================
+# PERFORMANCE PIC
+# ============================
+st.subheader("🧑‍💻 Grafik Performance PIC per Bulan")
 
-fig_pic = px.bar(pic_perf, x="PIC", y="JUMLAH", color="MONTH", barmode="group")
+df["MONTH"] = df["CREATE TICKET"].dt.month_name()
+
+pic_perf = df.groupby(["PIC", "MONTH"]).size().reset_index(name="JUMLAH")
+
+fig_pic = px.bar(pic_perf, x="PIC", y="JUMLAH",
+                 color="MONTH", barmode="group",
+                 title="Performance PIC per Bulan")
+
 st.plotly_chart(fig_pic, use_container_width=True)
 
-# ============================================================
-# TABEL KINERJA PIC LENGKAP
-# ============================================================
+
+# ============================
+# TABEL PIC
+# ============================
 st.subheader("📋 Tabel Performance PIC")
 
-pic_table = filtered.groupby("PIC").agg(
+pic_table = df.groupby("PIC").agg(
     TOTAL=("PIC", "count"),
     OPEN=("STATUS_TICKET", lambda x: (x == "Open").sum()),
     CLOSED=("STATUS_TICKET", lambda x: (x == "Close").sum()),
@@ -158,40 +129,70 @@ pic_table["AVG_AGE"] = pic_table["AVG_AGE"].round(1)
 
 st.dataframe(pic_table, use_container_width=True)
 
-# ============================================================
-# REKOMENDASI OTOMATIS
-# ============================================================
-st.subheader("💡 Rekomendasi Perbaikan Kinerja PIC")
 
-for _, row in pic_table.iterrows():
-    pic = row["PIC"]
-    avg_age = row["AVG_AGE"]
-    sla = row["SLA_%"]
+# ============================
+# GENERATE PPT FUNCTION
+# ============================
+def generate_ppt(summary_df, pic_df, fig1, fig2, fig3):
+    prs = Presentation(ppt_template)
 
-    st.markdown(f"### 🔧 {pic}")
+    # Convert plotly figure → PNG
+    temp_imgs = []
+    for fig in [fig1, fig2, fig3]:
+        tmpfile = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        fig.write_image(tmpfile.name)
+        temp_imgs.append(tmpfile.name)
 
-    rekom = []
+    # Slide 1 is cover (template)
+    
+    # Slide 2 – Summary
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Summary Data Ticket"
+    body = slide.shapes.placeholders[1]
+    body.text = summary_df.to_string(index=False)
 
-    if avg_age > 60:
-        rekom.append("- Ticket lama > **60 hari**. Perlu daily follow-up & koordinasi lintas divisi.")
+    # Slide 3 – Tabel PIC
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Performance PIC"
+    slide.shapes.placeholders[1].text = pic_df.to_string(index=False)
 
-    if sla < 70:
-        rekom.append("- SLA penyelesaian < **70%**. Perlu penambahan ritme closing ticket.")
+    # Slide 4 – Grafik Status
+    slide = prs.slides.add_slide(prs.slide_layouts[5])
+    slide.shapes.title.text = "Grafik Status Ticket"
+    slide.shapes.add_picture(temp_imgs[0], Inches(1), Inches(1), width=Inches(8))
 
-    if row["OPEN"] > row["CLOSED"]:
-        rekom.append("- Jumlah ticket OPEN lebih banyak dari CLOSED → potensi backlog.")
+    # Slide 5 – Grafik Age
+    slide = prs.slides.add_slide(prs.slide_layouts[5])
+    slide.shapes.title.text = "Distribusi Umur Ticket"
+    slide.shapes.add_picture(temp_imgs[1], Inches(1), Inches(1), width=Inches(8))
 
-    if len(rekom) == 0:
-        rekom.append("✔ Performance sangat baik & stabil.")
+    # Slide 6 – Grafik PIC
+    slide = prs.slides.add_slide(prs.slide_layouts[5])
+    slide.shapes.title.text = "Grafik PIC per Bulan"
+    slide.shapes.add_picture(temp_imgs[2], Inches(1), Inches(1), width=Inches(8))
 
-    for r in rekom:
-        st.write(r)
+    output = BytesIO()
+    prs.save(output)
+    return output
 
-    st.write("**Alasan bisnis:** Penyelesaian ticket cepat mengurangi risiko alarm berulang, mengurangi downtime, dan mempercepat troubleshooting NOC/BB/Access.\n---")
 
+# ============================
+# ADD DOWNLOAD PPT BUTTON
+# ============================
+st.subheader("📥 Download Presentasi PPT")
 
-# ============================================================
-# FULL DATA TABLE
-# ============================================================
-st.subheader("📑 Data Lengkap Ticket CODEX")
-st.dataframe(filtered, use_container_width=True)
+if st.button("Generate PPT"):
+    ppt_data = generate_ppt(summary=count_status,
+                            summary_df=count_status,
+                            pic_df=pic_table,
+                            fig1=fig_status,
+                            fig2=fig_age,
+                            fig3=fig_pic)
+
+    st.download_button(
+        label="📩 Download PPT Laporan CODEx",
+        data=ppt_data,
+        file_name="Laporan-CODEx-Moratel.pptx",
+        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    )
+
