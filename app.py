@@ -6,175 +6,182 @@ from pptx import Presentation
 from pptx.util import Inches
 import io
 
-# =========================
-# PAGE CONFIG
-# =========================
 st.set_page_config(page_title="Dashboard Ticket CODEX", layout="wide")
 st.title("📊 Dashboard Analisa Ticket CODEX (Versi Lengkap)")
 
-# =========================
-# FILE UPLOADER (1 FILE SAJA)
-# =========================
+
+# ==========================
+# UPLOAD FILE
+# ==========================
 uploaded = st.file_uploader("📁 Upload File CODEX (.xlsx)", type=["xlsx"])
 
 if uploaded is None:
     st.info("Silakan upload file CODEX (.xlsx) terlebih dahulu.")
     st.stop()
 
+# Baca data
 df = pd.read_excel(uploaded)
 
-# =========================
-# NORMALISASI KOLOM
-# =========================
-df.columns = [c.strip().upper() for c in df.columns]
+# Normalisasi nama kolom
+df.columns = [c.strip() for c in df.columns]
 
-# Pastikan ada kolom tanggal
-tanggal_col = "CREATE TICKET"
-if tanggal_col not in df.columns:
-    st.error(f"Kolom '{tanggal_col}' tidak ditemukan. Pastikan nama kolom sama.")
+# Pastikan kolom tanggal valid
+if "CREATE TICKET" not in df.columns:
+    st.error("Kolom 'CREATE TICKET' tidak ditemukan di excel.")
     st.stop()
 
-# Convert waktu
-df[tanggal_col] = pd.to_datetime(df[tanggal_col])
+df["CREATE TICKET"] = pd.to_datetime(df["CREATE TICKET"], errors="coerce")
 
-# Hitung umur tiket
-def hitung_umur(row):
-    if isinstance(row[tanggal_col], pd.Timestamp):
-        return (datetime.now() - row[tanggal_col]).days
-    return 0
+# AGE DAYS
+today = datetime.now()
+df["AGE_DAYS"] = (today - df["CREATE TICKET"]).dt.days
 
-df["AGE_DAYS"] = df.apply(hitung_umur, axis=1)
 
-# Normalisasi STATUS
-df["STATUS_TICKET"] = df["STATUS"].str.strip().str.lower()
+# ==========================
+# FILTER
+# ==========================
+col1, col2 = st.sidebar.columns(1)
 
-# =========================
-# FILTER SAMPING
-# =========================
-st.sidebar.header("⚙️ Filter")
+sub_list = ["ALL"] + sorted(df["ASSIGN DIVISION"].dropna().unique().tolist())
+status_list = ["ALL"] + sorted(df["STATUS"].dropna().unique().tolist())
 
-subdivisi_list = ["ALL"] + sorted(df["ASSIGN DIVISION"].dropna().unique().tolist())
-subdivisi = st.sidebar.selectbox("Sub Divisi", subdivisi_list)
+sub_filter = st.sidebar.selectbox("Sub Divisi", sub_list)
+status_filter = st.sidebar.selectbox("Status Ticket", status_list)
 
-status_list = ["ALL", "open", "close"]
-status_ticket = st.sidebar.selectbox("Status Ticket", status_list)
+dff = df.copy()
+if sub_filter != "ALL":
+    dff = dff[dff["ASSIGN DIVISION"] == sub_filter]
+if status_filter != "ALL":
+    dff = dff[dff["STATUS"] == status_filter]
 
-df_filtered = df.copy()
 
-# Filter sub divisi
-if subdivisi != "ALL":
-    df_filtered = df_filtered[df_filtered["ASSIGN DIVISION"] == subdivisi]
 
-# Filter status
-if status_ticket != "ALL":
-    df_filtered = df_filtered[df_filtered["STATUS_TICKET"] == status_ticket]
+# ==========================
+# GRAFIK AGE DAYS
+# ==========================
+st.subheader("📈 Distribusi Umur Ticket (AGE DAYS)")
 
-# =========================
-# ANALISA 1 — Summary Kategori (Count)
-# =========================
-count_status = df_filtered.groupby("STATUS").size().reset_index(name="JUMLAH")
-
-st.subheader("📌 Grafik Jumlah Ticket Berdasarkan Kategori")
-fig1 = px.bar(
-    count_status,
-    x="STATUS",
-    y="JUMLAH",
+fig_age = px.histogram(
+    dff,
+    x="AGE_DAYS",
     color="STATUS",
-    text="JUMLAH"
+    nbins=20,
+    title="Distribusi Umur Ticket"
 )
-st.plotly_chart(fig1, use_container_width=True)
-
-# =========================
-# ANALISA 2 — AGE HISTOGRAM
-# =========================
-st.subheader("⏱️ Distribusi Umur Ticket (Hari)")
-fig_age = px.histogram(df_filtered, x="AGE_DAYS", nbins=20, color="STATUS")
 st.plotly_chart(fig_age, use_container_width=True)
 
-# =========================
-# ANALISA 3 — Produktivitas PIC per Bulan
-# =========================
-st.subheader("👨‍💻 Produktivitas PIC (Ticket yang diselesaikan)")
 
-df_closed = df[df["STATUS_TICKET"] == "close"].copy()
-df_closed["BULAN"] = df_closed["CREATE TICKET"].dt.to_period("M").astype(str)
 
-pic_summary = df_closed.groupby(["ASSIGN DIVISION", "BULAN"]).size().reset_index(name="TIKET_SELESAI")
+# ==========================
+# TABLE SUMMARY STATUS
+# ==========================
+st.subheader("📌 Ringkasan Ticket per Status")
 
-fig_pic = px.bar(
-    pic_summary,
-    x="BULAN",
-    y="TIKET_SELESAI",
-    color="ASSIGN DIVISION",
-    barmode="group",
-    text="TIKET_SELESAI"
+count_status = dff["STATUS"].value_counts().reset_index()
+count_status.columns = ["STATUS", "JUMLAH"]
+
+st.dataframe(count_status, use_container_width=True)
+
+
+
+# ==========================
+# ANALISA PIC (Assignee)
+# ==========================
+st.subheader("👨‍🔧 Jumlah Ticket per PIC per Bulan")
+
+# Tambah kolom bulan
+dff["BULAN"] = dff["CREATE TICKET"].dt.to_period("M").astype(str)
+
+pic_month = dff.pivot_table(
+    index="ASSIGN DIVISION",
+    columns="BULAN",
+    values="NO",
+    aggfunc="count",
+    fill_value=0
 )
 
+st.dataframe(pic_month, use_container_width=True)
+
+fig_pic = px.bar(
+    pic_month.reset_index().melt(id_vars="ASSIGN DIVISION"),
+    x="ASSIGN DIVISION",
+    y="value",
+    color="BULAN",
+    title="Jumlah Ticket per PIC per Bulan",
+    barmode="group"
+)
 st.plotly_chart(fig_pic, use_container_width=True)
 
-st.dataframe(pic_summary, use_container_width=True)
 
-# =========================
-# PPT GENERATOR FUNCTION
-# =========================
+
+# ==========================
+# SARAN OTOMATIS
+# ==========================
+st.subheader("📝 Saran Perbaikan Kinerja PIC")
+
+saran_list = []
+for divisi in pic_month.index:
+    total = pic_month.loc[divisi].sum()
+
+    if total >= 15:
+        saran = f"🔥 **{divisi}** menangani banyak ticket ({total}). Disarankan menambah engineer atau mempercepat penutupan."
+    elif total >= 8:
+        saran = f"⚠ **{divisi}** memiliki beban kerja sedang ({total}). Perlu monitoring agar backlog tidak meningkat."
+    else:
+        saran = f"✔ **{divisi}** beban kerja rendah ({total}). Kinerja stabil."
+    
+    saran_list.append(saran)
+
+for s in saran_list:
+    st.write("-", s)
+
+
+
+# ==========================
+# GENERATE PPT
+# ==========================
+st.subheader("📥 Download Presentasi PPT")
+
 def generate_ppt(df_summary, fig_age, fig_pic):
     prs = Presentation("template PPT Moratel.pptx")
 
-    # SLIDE 1 — SUMMARY TABLE
-    slide1 = prs.slides.add_slide(prs.slide_layouts[1])
-    slide1.shapes.title.text = "Summary Ticket CODEX"
+    # SLIDE 1 - SUMMARY
+    slide = prs.slides[0]
+    body = slide.shapes.placeholders[1].text_frame
+    body.text = "Ringkasan Ticket CODEX:\n"
 
-    rows, cols = df_summary.shape
-    table = slide1.shapes.add_table(
-        rows + 1, cols,
-        Inches(0.5), Inches(1.5), Inches(9), Inches(0.8)
-    ).table
+    for _, row in df_summary.iterrows():
+        body.text += f"- {row['STATUS']}: {row['JUMLAH']}\n"
 
-    # header
-    for j, col in enumerate(df_summary.columns):
-        table.cell(0, j).text = col
+    # SLIDE 2 - Grafik AGE DAYS
+    img_stream1 = io.BytesIO()
+    fig_age.write_image(img_stream1, format="png")
+    img_stream1.seek(0)
 
-    # isi
-    for i in range(rows):
-        for j in range(cols):
-            table.cell(i+1, j).text = str(df_summary.iloc[i, j])
-
-    # SLIDE 2 — AGE
-    img_bytes = io.BytesIO()
-    fig_age.write_image(img_bytes, format="png")
-    img_bytes.seek(0)
     slide2 = prs.slides.add_slide(prs.slide_layouts[5])
-    slide2.shapes.add_picture(img_bytes, Inches(1), Inches(1), width=Inches(8))
+    slide2.shapes.add_picture(img_stream1, Inches(1), Inches(1), width=Inches(8))
 
-    # SLIDE 3 — PIC GRAPH
-    img2_bytes = io.BytesIO()
-    fig_pic.write_image(img2_bytes, format="png")
-    img2_bytes.seek(0)
+    # SLIDE 3 - Grafik PIC
+    img_stream2 = io.BytesIO()
+    fig_pic.write_image(img_stream2, format="png")
+    img_stream2.seek(0)
+
     slide3 = prs.slides.add_slide(prs.slide_layouts[5])
-    slide3.shapes.add_picture(img2_bytes, Inches(1), Inches(1), width=Inches(8))
+    slide3.shapes.add_picture(img_stream2, Inches(1), Inches(1), width=Inches(8))
 
-    # Save PPT
+    # SAVE PPT TO BYTES
     output = io.BytesIO()
     prs.save(output)
-    output.seek(0)
     return output
 
-# =========================
-# BUTTON DOWNLOAD PPT
-# =========================
-st.subheader("📥 Download Presentasi PPT")
 
 if st.button("Generate PPT"):
-    ppt_data = generate_ppt(
-        df_summary=count_status,
-        fig_age=fig_age,
-        fig_pic=fig_pic
-    )
+    ppt = generate_ppt(count_status, fig_age, fig_pic)
+    st.success("Berhasil generate PPT!")
 
-    st.success("PPT berhasil dibuat! Silakan download.")
     st.download_button(
-        label="Download PPT",
-        data=ppt_data,
-        file_name="Analisa_Ticket_CODEX.pptx",
+        label="📥 Download PPT",
+        data=ppt,
+        file_name="Analisa Ticket CODEX.pptx",
         mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
     )
